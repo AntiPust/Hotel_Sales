@@ -1,0 +1,477 @@
+--TABLE hotel_Sales - данные за 2024 год - https://www.kaggle.com/datasets/tianrongsim/hotel-sales-2024?resource=download
+
+--hotel_name - название отеля
+--reg - регион, район (центральный, северный, восточный и пр.)
+--state - государство
+--types - тип отеля (city hotel / resort hotel)
+--cus_name - имя клиента 
+--phone_no - номер телефона
+--emel - электронная почта
+--customer_rating - рейтинг клиента (1-5)
+--membership - членство (platinum/gold)
+--rep_gest - повторный гость (0, 1 и пр.) 
+--prev_cancel - предыдущие отмены (0, 1 и пр.)
+--payment_method - способ оплаты (credit card/cash/online transfer)
+--card_no - номер карты (************1234)
+--resv_status - статус бронирования (Check-Out - оформлен)
+--meal - еда (BB/FB и пр.)
+--assgn_room - категория и тип комнат (A/B/C/D и пр.)
+--cus_seg - тип клиента (individual, family, corporate и пр.)
+--room-type - тип номера (количество мест в номере - single/deluxe/royal/studio)
+--adult - Количество взрослых
+--(child) - количество детей
+--dis_channel - дисконтный канал (Booking и пр.)
+--price - цена номера за 1 ночь
+--nights - Количество ночей
+--package_ - стоимость багажа
+--gross - валовая продажа (общая стоимость номера на n-е количество ночей без скидки)
+--disc - скидка в долях (0.01/0.05/0.1)
+--disc_amt - скидка в рублях
+--sales - чистая выручка за номер
+--dep - депозит
+--d_s - Возвращен(refunded)/потрачен(forfeited)
+--arrival_date - Дата прибытия
+--depature_date - дата убытия
+--ADR - средняя стоимость номера за сутки
+--Sales Person - Продавец
+--pos - позиция
+--comm_pay - комиссия
+--customer_review - отзыв клиента
+
+
+--Для начала нужно проверить есть ли в таблице дубликаты и пропуски. После проверки всех столбцов дубликаты не выявлены, однако обнаружился 
+--столбец membership, сведения в котором в 83 строках отсутствуют, однако для вычисления необходимых метрик мне это не никак не помешает,
+--за исключением подсчета доли видов membership по отелям, где строки с отсутствующими данными в membership я просто опущу.
+--Сотрудники отелей же не виноваты, что гости не захотели оформлять карты membership
+
+SELECT 
+    *, 
+    COUNT(*) AS count
+FROM 
+    Hotel_Sales
+GROUP BY 
+    *
+HAVING 
+    count > 1;
+^
+0
+
+SELECT *
+FROM Hotel_Sales
+WHERE membership IS NULL OR membership = '';
+^
+--83 строки
+
+
+--Количество проданных отелями номеров по месяцам
+
+CREATE TABLE Count_hotel_orders
+(
+    hotel_name String,
+    month UInt64,
+    count_hotel_orders UInt64
+) ENGINE = MergeTree()
+ORDER BY (hotel_name, month) 
+AS
+SELECT 
+    hotel_name, 
+    toMonth(arrival_date) AS month,
+    COUNT(*) AS count_hotel_orders    
+FROM Hotel_Sales
+GROUP BY hotel_name, month
+ORDER BY hotel_name, month;
+
+
+--Количество проживавших людей в отелях с разбивкой по взрослым и детям и месяцам
+
+CREATE TABLE Total_adult_child_persons
+(
+    hotel_name String, 
+    month UInt8,
+    total_adults UInt64,
+    total_children UInt64,
+    total_persons UInt64
+) ENGINE = MergeTree()
+ORDER BY (hotel_name, month) 
+AS
+SELECT 
+    hotel_name, 
+    toMonth(arrival_date) AS month, 
+    SUM(adult) AS total_adults, 
+    SUM("(child)") AS total_children,
+    SUM(adult) + SUM("(child)") AS total_persons
+FROM Hotel_Sales
+WHERE resv_status = 'Check-Out' 
+GROUP BY hotel_name, month
+ORDER BY hotel_name, month;
+
+
+--Топ клиентов, кто проживал в отелях более двух раз
+
+CREATE TABLE Top_persons
+(
+    cus_name String, 
+    count_orders UInt64
+) ENGINE = MergeTree()
+ORDER BY (count_orders, cus_name) 
+AS
+SELECT cus_name, COUNT(*) AS count_orders
+FROM Hotel_Sales
+GROUP BY cus_name
+HAVING COUNT(*) > 2
+ORDER BY count_orders DESC, cus_name ASC;
+
+
+--Средний рейтинг гостей по отелям
+
+SELECT hotel_name, ROUND(AVG(customer_rating), 2) AS avg_rating 
+FROM Hotel_Sales
+GROUP BY hotel_name 
+ORDER BY avg_rating DESC;
+^
+Lexis Suites, Penang - 3.72
+The Hilton, Kuala Lumpur - 3.68
+Le Méridien, Sabah - 3.67
+
+
+--Теперь посмотрим занесены ли в колонки таблицы 'rep_gest', 'prev_cancel' сведения о повторных гостях и отмененных заказах.
+--Согласно результатов таких гостей нет, однако ранее мы находили топ 10 гостей, которые неоднократно бывали в отелях. На первом месте
+--находится гость с именем 'Michael Smith', который 6 раз заезжал в отели. При более детальной проверке выяснилось, что это все
+--разные люди, у которых различается номер телефона, электронная почта, последние 4 цифры банковской карты. При проверке других клиентов
+--ситуация та же самая
+
+SELECT *
+FROM Hotel_Sales
+WHERE rep_guest > 0 OR prev_cancel > 0;
+^
+0
+
+SELECT hotel_name, reg, state, cus_name, phone_no, emel, card_no
+FROM Hotel_Sales
+WHERE cus_name = 'Michael Smith';
+^
+Le Méridien, Sabah	East	Sabah	Michael Smith	615-796-2773	Michael.S@aol.com	************6994
+Le Méridien, Sabah	East	Sabah	Michael Smith	578-001-8705	Michael.Smith@aol.com	************5269
+The Hilton, Kuala Lumpur	Central	Kuala Lumpur	Michael Smith	485-039-9690	Michael_Smith@zoho.com	************5866
+Le Méridien, Sabah	East	Sabah	Michael Smith	208-245-4291	Smith.Michael48@protonmail.com	************8999
+Le Méridien, Sabah	East	Sabah	Michael Smith	697-839-4607	Michael.Smith61@protonmail.com	************3581
+Le Méridien, Sabah	East	Sabah	Michael Smith	580-506-0318	MichaelSmith@att.com	************5795
+
+
+--Теперь посмотрим сколько было корпоративных, семейных и индивидуальных гостей с разбивкой по кварталам, при этом добавляя
+--для удобства просмотра дополнительные столбцы 'sum_count_cus_seg', 'total_count_cus_seg', используя оконные функции
+
+CREATE TABLE Types_of_guests
+(
+    hotel_name String, 
+    cus_seg String,
+    month UInt64,
+    count_cus_seg UInt64,
+    sum_count_cus_seg UInt64,
+    total_count_cus_seg UInt64 
+) ENGINE = MergeTree()
+ORDER BY (hotel_name, cus_seg, month) 
+AS
+SELECT 
+    hotel_name, cus_seg, 
+    toMonth(arrival_date) AS month,
+    COUNT(cus_seg) AS count_cus_seg,
+    SUM(count_cus_seg) over (partition by hotel_name, cus_seg) as sum_count_cus_seg,
+    SUM(count_cus_seg) over (partition by hotel_name) AS total_count_cus_seg
+FROM Hotel_Sales
+GROUP BY hotel_name, cus_seg, month
+ORDER BY hotel_name, cus_seg, month;
+
+
+--Средняя цена номеров по отелям с разбивкой по типу номера
+
+CREATE TABLE Types_of_rooms
+(
+    hotel_name String, 
+    "room-type" String,
+    avg_price Float64 
+) ENGINE = MergeTree()
+ORDER BY (hotel_name, "room-type") 
+AS
+SELECT hotel_name, "room-type", AVG(price) AS avg_price
+FROM Hotel_Sales
+GROUP BY hotel_name, "room-type"
+ORDER BY hotel_name, "room-type";
+
+
+--Стоит заметить, что в таблице нет информации о полной(частичной) оплате и датах оплаты, в связи с чем что при подсчете финансовых метрик я буду использовать 
+столбец arrival_date как дату полной оплаты, чтобы в дальнейшем правильно рассчитывать показатели помесячно
+
+
+--Сведения по средним скидкам отелей по месяцам, в том числе в денежном эквиваленте
+
+CREATE TABLE Hotel_avg_discounts
+(
+    hotel_name String,
+    month UInt64,
+    avg_month_disc Float64, 
+    avg_disc_amt_month Float64,
+    avg_hotel_disc Float64, 
+    avg_disc_amt_hotel Float64,
+    avg_total_disc Float64,
+    avg_total_disc_amt Float64
+) ENGINE = MergeTree()
+ORDER BY (hotel_name, month)
+AS
+SELECT hotel_name, 
+toMonth(arrival_date) AS month,
+ROUND((AVG(disc) * 100), 2) AS avg_month_disc,
+ROUND(AVG(disc_amt), 2) AS avg_disc_amt_month,
+ROUND(AVG(AVG(disc)) over (partition by hotel_name) * 100, 2) AS avg_hotel_disc,
+ROUND(AVG(AVG(disc_amt)) over (partition by hotel_name), 2) AS avg_disc_amt_hotel,
+ROUND(AVG(AVG(disc)) over () * 100, 2) AS avg_total_disc,
+ROUND(AVG(AVG(disc_amt)) over (), 2) AS avg_total_disc_amt
+FROM Hotel_Sales
+GROUP BY hotel_name, month
+ORDER BY hotel_name, month;
+
+
+--Сведения по общему и среднему количеству ночей проживания в отелях по месяцам
+
+CREATE TABLE Hotel_nights
+(
+    hotel_name String,
+    month UInt64,
+    month_sum_nights UInt64, 
+    hotel_sum_nights UInt64,
+    total_sum_nights UInt64, 
+    avg_month_nights Float64,
+    avg_hotel_nights Float64,
+    total_avg_nights Float64
+) ENGINE = MergeTree()
+ORDER BY (hotel_name, month)
+AS
+SELECT hotel_name, toMonth(arrival_date) AS month, 
+SUM(nights) AS month_sum_nights,
+SUM(SUM(nights)) over (partition by hotel_name) AS hotel_sum_nights,
+SUM(SUM(nights)) over () AS total_sum_nights,
+ROUND(AVG(nights), 2) AS avg_month_nights,
+ROUND(AVG(AVG(nights)) over (partition by hotel_name), 2) AS avg_hotel_nights,
+ROUND(AVG(AVG(nights)) over (), 2) AS total_avg_nights
+FROM Hotel_Sales
+GROUP BY hotel_name, month 
+ORDER BY hotel_name, month;
+
+
+--Отзывы гостей по месяцам, с учетом вида проживания (семейный, индивидуальный, корпоративный)
+
+CREATE TABLE Hotel_review
+(
+    hotel_name String,
+    cus_seg String,
+    customer_review String,
+    month UInt64,
+    count_month_review UInt64,
+) ENGINE = MergeTree()
+ORDER BY (hotel_name, cus_seg, customer_review, month)
+AS
+SELECT hotel_name, cus_seg, customer_review, toMonth(arrival_date) AS month,
+COUNT(customer_review) AS count_month_review
+FROM Hotel_Sales
+GROUP BY hotel_name, cus_seg, customer_review, month
+ORDER BY hotel_name, cus_seg, customer_review, month;
+
+
+--Теперь мне нужно посчитать основные метрики по отелям, для этого мне нужно знать общее количество номеров в отелях:
+Le Méridien, Sabah - 309 - https://www.meetings-conventions.com/Meeting-Event-Venues/Kota-Kinabalu-Malaysia/Convention-Hotel/Le-Meridien-Kota-Kinabalu-p2388453
+Lexis Suites, Penang - 222 - https://www.lexissuitespenang.com
+The Hilton, Kuala Lumpur - 512 - https://www.travelweekly.com/Hotels/Kuala-Lumpur/Hilton-Kuala-Lumpur-p4057723
+
+
+--Основные метрики гостиничного бизнеса, которые помогают понять две вещи: куда движется бизнес и где он находится относительно других игроков рынка:
+Источник - https://vc.ru/flood/24755-basic-indicators-for-hotels
+
+--1. Room Revenue — выручка от продаж за номерной фонд.
+--2. Occupancy — загрузка, занятость или заполняемость гостиницы.
+--3. ADR (Average daily room rate) — средняя цена за номер или ночь.
+--4. RevPAR (Revenue per available room per day) — выручка номерного фонда за один номер.
+--5. RevPAC (Revenue per Available Customer) — выручка номерного фонда на гостя в день, месяц, год.
+
+--1. Room Revenue
+--Показатель рассчитывается как полная выручка от номерного фонда за вычетом налогов и расходов на питание. Измеряется в рублях. 
+--Комиссия, которая платится экстранетам или турагентствам, тоже вычитается.
+
+--2. Occupancy. Загрузка равна количеству проданных номеров, поделённому на общее количество номеров. Измеряется в процентах.--
+
+--3. ADR (средняя цена на номер). ADR равна выручке от продажи номерного фонда, поделённой на количество проданных номеров. 
+--Так мы получаем стоимость, по которой продавали, уже с учетом всех скидок. Измеряется в рублях.
+--Факторы, которые влияют на ADR: Конкурентная среда. Сезонность. Активность (динамические тарифы, акции). Инфляция.
+
+--4. RevPAR (средний доход на комнату). RevPAR — один из самых важных показателей, так как он воплощает собой всю политику ваших продаж. 
+--RevPAR равен выручке от продажи номерного фонда, поделённой на количество всех номеров в отеле. 
+--Иначе говоря, RevPAR равен ADR, умноженной на загрузку. Измеряется в рублях.
+--Важно очень внимательно следить за тем, как RevPAR меняется внутри отеля. Этот показатель показывает, насколько хорошо работает бизнес. 
+--В идеале RevPAR должен постоянно расти.
+
+
+--5. RevPAС (доход на гостя)
+--Этот показатель плавно вытекает из предыдущего. RevPAС равен полной выручке (с учётом питания, проживания, дополнительных услуг, налогов), 
+--поделённой на количество проживающих в гостинице. Измеряется в рублях.
+--RevPAС хорошо определяет работу администраторов или других менеджеров, которые занимаются продажей дополнительных услуг. 
+--Чем выше RevPAС, тем лучше работают сотрудники. Нередко этот показатель используют в качестве KPI.
+
+
+--Итак, посчитаем 1. Room Revenue (полную выручку от номерного фонда), 2. Occupancy (загрузку), 3. ADR (среднюю цену на номер), 
+RevPAR (средний доход на комнату), 5. RevPAС (доход на гостя) отеля 'Lexis Suites, Penang' с его количеством номеров 222 по месяцам 
+с учетом комиссии, исключая данные по налогам и питанию (отсутствуют) и сразу создадим отдельную таблицу из полученных данных
+
+CREATE TABLE Lexis_Suites_Penang 
+(
+    hotel_name String, 
+    month UInt8,
+    total_available_room_nights UInt64,
+    total_rooms_sold UInt64,
+    occupancy Float64,
+    total_revenue Float64,
+    adr_hotel Float64,
+    revpar Float64,
+    revpac Float64
+) ENGINE = MergeTree()
+ORDER BY (hotel_name, month) 
+AS
+WITH (
+    SELECT [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+) AS days_in_month  
+SELECT 
+    hotel_name, 
+    toMonth(arrival_date) AS month,
+    (222 * days_in_month[toMonth(arrival_date)]) AS total_available_room_nights,
+    SUM(dateDiff('day', arrival_date, depature_date) + 1) AS total_rooms_sold,
+    ROUND((SUM(dateDiff('day', arrival_date, depature_date)) / 
+    (222 * days_in_month[toMonth(arrival_date)])) * 100, 2) AS occupancy,
+    SUM((sales / nights) * dateDiff('day', arrival_date, depature_date)) AS total_revenue,
+    ROUND(SUM((sales / nights) * dateDiff('day', arrival_date, depature_date)) / NULLIF(SUM(dateDiff('day', arrival_date, depature_date)), 0), 2) AS adr_hotel,
+    ROUND(SUM((sales / nights) * dateDiff('day', arrival_date, depature_date)) / 
+    (222 * days_in_month[toMonth(arrival_date)]), 2) AS revpar,
+    ROUND(SUM((sales / nights) * dateDiff('day', arrival_date, depature_date)) / SUM(adult + "(child)"), 2) AS revpac
+FROM 
+    Hotel_Sales
+WHERE 
+    hotel_name = 'Lexis Suites, Penang'
+    AND arrival_date >= '2024-01-01' 
+    AND arrival_date < '2024-12-31'
+GROUP BY 
+    hotel_name, month
+ORDER BY 
+    month;
+	
+	
+--Теперь то же самое по отелю 'Le Méridien, Sabah' с общим количеством номеров 309
+
+CREATE TABLE Le_Meridien_Sabah 
+(
+    hotel_name String, 
+    month UInt8,
+    total_available_room_nights UInt64,
+    total_rooms_sold UInt64,
+    occupancy Float64,
+    total_revenue Float64,
+    adr_hotel Float64,
+    revpar Float64,
+    revpac Float64
+) ENGINE = MergeTree()
+ORDER BY (hotel_name, month) 
+AS
+WITH (
+    SELECT [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+) AS days_in_month  
+SELECT 
+    hotel_name, 
+    toMonth(arrival_date) AS month,
+    (309 * days_in_month[toMonth(arrival_date)]) AS total_available_room_nights,
+    SUM(dateDiff('day', arrival_date, depature_date) + 1) AS total_rooms_sold,
+    ROUND((SUM(dateDiff('day', arrival_date, depature_date)) / 
+    (309 * days_in_month[toMonth(arrival_date)])) * 100, 2) AS occupancy,
+    SUM((sales / nights) * dateDiff('day', arrival_date, depature_date)) AS total_revenue,
+    ROUND(SUM((sales / nights) * dateDiff('day', arrival_date, depature_date)) / NULLIF(SUM(dateDiff('day', arrival_date, depature_date)), 0), 2) AS adr_hotel,
+    ROUND(SUM((sales / nights) * dateDiff('day', arrival_date, depature_date)) / 
+    (309 * days_in_month[toMonth(arrival_date)]), 2) AS revpar,
+    ROUND(SUM((sales / nights) * dateDiff('day', arrival_date, depature_date)) / SUM(adult + "(child)"), 2) AS revpac
+FROM 
+    Hotel_Sales
+WHERE 
+    hotel_name = 'Le Méridien, Sabah'
+    AND arrival_date >= '2024-01-01' 
+    AND arrival_date < '2024-12-31'
+GROUP BY 
+    hotel_name, month
+ORDER BY 
+    month; 
+
+
+--И также по отелю 'The Hilton, Kuala Lumpur' с общим количеством номеров 512 	
+
+CREATE TABLE The_Hilton_Kuala_Lumpur 
+(
+    hotel_name String, 
+    month UInt8,
+    total_available_room_nights UInt64,
+    total_rooms_sold UInt64,
+    occupancy Float64,
+    total_revenue Float64,
+    adr_hotel Float64,
+    revpar Float64,
+    revpac Float64
+) ENGINE = MergeTree()
+ORDER BY (hotel_name, month) 
+AS
+WITH (
+    SELECT [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+) AS days_in_month  
+SELECT 
+    hotel_name, 
+    toMonth(arrival_date) AS month,
+    (512 * days_in_month[toMonth(arrival_date)]) AS total_available_room_nights,
+    SUM(dateDiff('day', arrival_date, depature_date) + 1) AS total_rooms_sold,
+    ROUND((SUM(dateDiff('day', arrival_date, depature_date)) / 
+    (512 * days_in_month[toMonth(arrival_date)])) * 100, 2) AS occupancy,
+    SUM((sales / nights) * dateDiff('day', arrival_date, depature_date)) AS total_revenue,
+    ROUND(SUM((sales / nights) * dateDiff('day', arrival_date, depature_date)) / NULLIF(SUM(dateDiff('day', arrival_date, depature_date)), 0), 2) AS adr_hotel,
+    ROUND(SUM((sales / nights) * dateDiff('day', arrival_date, depature_date)) / 
+    (512 * days_in_month[toMonth(arrival_date)]), 2) AS revpar,
+    ROUND(SUM((sales / nights) * dateDiff('day', arrival_date, depature_date)) / SUM(adult + "(child)"), 2) AS revpac
+FROM 
+    Hotel_Sales
+WHERE 
+    hotel_name = 'The Hilton, Kuala Lumpur'
+    AND arrival_date >= '2024-01-01' 
+    AND arrival_date < '2024-12-31'
+GROUP BY 
+    hotel_name, month
+ORDER BY 
+    month; 
+	
+
+--Создадим общую таблицу со всеми метриками по трем отелям
+
+CREATE TABLE Finish_hotels
+(
+    hotel_name String, 
+    month UInt8,
+    total_available_room_nights UInt64,
+    total_rooms_sold UInt64,
+    occupancy Float64,
+    total_revenue Float64,
+    adr_hotel Float64,
+    revpar Float64,
+    revpac Float64
+) ENGINE = MergeTree()
+ORDER BY (hotel_name, month) 
+AS
+SELECT *
+FROM Le_Meridien_Sabah
+UNION ALL
+SELECT *
+FROM Lexis_Suites_Penang
+UNION ALL
+SELECT *
+FROM The_Hilton_Kuala_Lumpur
+ORDER BY hotel_name, month;
+	
+	
+--Теперь покажем все данные через визуализацию Superset	
